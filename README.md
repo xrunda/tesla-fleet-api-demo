@@ -30,6 +30,7 @@ From a terminal
 ```
 openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
 openssl ec -in private-key.pem -pubout -out public-key.pem
+mkdir .well-known/appspecific
 cp public-key.pem .well-known/appspecific/com.tesla.3p.public-key.pem
 ```
 

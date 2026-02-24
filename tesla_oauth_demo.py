@@ -1,6 +1,7 @@
 
 from flask import Flask, redirect, request, send_from_directory
 import secrets, requests, urllib.parse, time, os, base64, json
+import html
 
 app = Flask(__name__)
 
@@ -117,13 +118,13 @@ class TeslaAPI:
     def get_vehicle_data(self, vid):
         return self.api_get(f"/api/1/vehicles/{vid}/vehicle_data")
 
-    def command_vehicle(self, vid, command, data=None):
+    def command_vehicle(self, vid, command, data=None, force_direct=False):
         if not self.valid():
             self.refresh()
         headers = {"Authorization": f"Bearer {self.tokens['access_token']}"}
         path = f"/api/1/vehicles/{vid}/command/{command}"
         try:
-            if VEHICLE_COMMAND_PROXY_BASE:
+            if VEHICLE_COMMAND_PROXY_BASE and not force_direct:
                 verify_opt = False if VEHICLE_COMMAND_PROXY_INSECURE else (VEHICLE_COMMAND_PROXY_CA_CERT or True)
                 return requests.post(
                     f"{VEHICLE_COMMAND_PROXY_BASE}{path}",
@@ -312,63 +313,104 @@ def vehicle_command(vid, command):
     if lang not in ("zh", "en"):
         lang = "zh"
 
-    supported_now = {"auto_conditioning_start", "auto_conditioning_stop"}
+    supported_now = {
+        "actuate_trunk", "add_charge_schedule", "add_precondition_schedule", "adjust_volume",
+        "auto_conditioning_start", "auto_conditioning_stop", "cancel_software_update",
+        "charge_max_range", "charge_port_door_close", "charge_port_door_open",
+        "charge_standard", "charge_start", "charge_stop", "clear_pin_to_drive_admin",
+        "door_lock", "door_unlock", "erase_user_data", "flash_lights", "guest_mode",
+        "honk_horn", "media_next_fav", "media_next_track", "media_prev_fav",
+        "media_prev_track", "media_toggle_playback", "media_volume_down",
+        "navigation_gps_request", "navigation_request", "navigation_sc_request",
+        "navigation_waypoints_request", "remote_auto_seat_climate_request",
+        "remote_auto_steering_wheel_heat_climate_request", "remote_boombox",
+        "remote_seat_cooler_request", "remote_seat_heater_request", "remote_start_drive",
+        "remote_steering_wheel_heat_level_request", "remote_steering_wheel_heater_request",
+        "remove_charge_schedule", "remove_precondition_schedule", "reset_pin_to_drive_pin",
+        "reset_valet_pin", "schedule_software_update", "set_bioweapon_mode",
+        "set_cabin_overheat_protection", "set_charge_limit", "set_charging_amps",
+        "set_climate_keeper_mode", "set_cop_temp", "set_pin_to_drive",
+        "set_preconditioning_max", "set_scheduled_charging", "set_scheduled_departure",
+        "set_sentry_mode", "set_temps", "set_valet_mode", "set_vehicle_name",
+        "speed_limit_activate", "speed_limit_clear_pin", "speed_limit_clear_pin_admin",
+        "speed_limit_deactivate", "speed_limit_set_limit", "sun_roof_control",
+        "trigger_homelink", "upcoming_calendar_entries", "window_control",
+    }
     if command not in supported_now:
-        msg = "该指令待开发" if lang == "zh" else "This command is pending implementation"
+        msg = "未知或不支持的指令" if lang == "zh" else "Unknown or unsupported command"
         return redirect(
-            f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=pending&cmd_message={urllib.parse.quote_plus(msg)}"
+            f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
         )
+
+    payload_raw = (request.form.get("payload") or "").strip()
+    command_payload = None
+    if payload_raw:
+        try:
+            command_payload = json.loads(payload_raw)
+        except Exception:
+            msg = "JSON 参数格式错误，请检查 payload" if lang == "zh" else "Invalid JSON payload"
+            return redirect(
+                f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
+            )
+
+    def _clean_msg(raw):
+        s = str(raw or "").replace("\ufffd", "").strip()
+        return " ".join(s.split())
+
+    def _parse_command_response(resp_obj):
+        if resp_obj is None:
+            return ("error", tesla_api.last_network_error or ("网络/TLS 异常" if lang == "zh" else "Network/TLS error"), False)
+        try:
+            payload_obj = resp_obj.json()
+        except Exception:
+            msg_local = resp_obj.text[:300] if resp_obj.text else ("空响应" if lang == "zh" else "Empty response")
+            return ("error", _clean_msg(msg_local), False)
+
+        result_local = False
+        reason_local = ""
+        if isinstance(payload_obj, dict):
+            response_obj = payload_obj.get("response", {})
+            if isinstance(response_obj, dict):
+                result_local = bool(response_obj.get("result", False))
+                reason_local = str(response_obj.get("reason", "") or "")
+
+        if resp_obj.status_code == 200 and result_local:
+            return ("ok", "指令已发送成功" if lang == "zh" else "Command sent successfully", False)
+
+        error_description = payload_obj.get("error_description") if isinstance(payload_obj, dict) else ""
+        error_name = payload_obj.get("error") if isinstance(payload_obj, dict) else ""
+        msg_local = _clean_msg(reason_local or error_description or error_name or ("指令执行失败" if lang == "zh" else "Command failed"))
+        requires_rest_api = "command requires using the REST API" in msg_local
+
+        if requires_rest_api:
+            msg_local = (
+                "该指令需通过 REST API 执行，已尝试自动回退。" if lang == "zh"
+                else "This command requires REST API and is being retried automatically."
+            )
+        elif "Vehicle Command Protocol required" in msg_local and not VEHICLE_COMMAND_PROXY_BASE:
+            msg_local = (
+                "当前车辆要求 Tesla Vehicle Command Protocol 签名。请先启动 vehicle-command 代理，并设置 VEHICLE_COMMAND_PROXY_BASE（例如 https://127.0.0.1:4443）"
+                if lang == "zh"
+                else "This vehicle requires Tesla Vehicle Command Protocol signing. Start vehicle-command proxy and set VEHICLE_COMMAND_PROXY_BASE (for example https://127.0.0.1:4443)."
+            )
+        return ("error", msg_local, requires_rest_api)
 
     vehicles = tesla_api.get_vehicles()
     vehicle = next((v for v in vehicles if str(v.get("id")) == str(vid)), {})
     vin_or_id = vehicle.get("vin") or vid
-    resp = tesla_api.command_vehicle(vin_or_id, command)
-    if resp is None:
-        msg = tesla_api.last_network_error or ("网络/TLS 异常" if lang == "zh" else "Network/TLS error")
-        return redirect(
-            f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
-        )
+    resp = tesla_api.command_vehicle(vin_or_id, command, data=command_payload)
+    status, msg, requires_rest = _parse_command_response(resp)
 
-    try:
-        payload = resp.json()
-    except Exception:
-        msg = resp.text[:300] if resp.text else ("空响应" if lang == "zh" else "Empty response")
-        return redirect(
-            f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
-        )
-
-    result = False
-    reason = ""
-    if isinstance(payload, dict):
-        response_obj = payload.get("response", {})
-        if isinstance(response_obj, dict):
-            result = bool(response_obj.get("result", False))
-            reason = str(response_obj.get("reason", "") or "")
-
-    if resp.status_code == 200 and result:
-        msg = "指令已发送成功" if lang == "zh" else "Command sent successfully"
-        status = "ok"
-    else:
-        error_description = payload.get("error_description") if isinstance(payload, dict) else ""
-        error_name = payload.get("error") if isinstance(payload, dict) else ""
-        msg = reason or error_description or error_name or ("指令执行失败" if lang == "zh" else "Command failed")
-        if (
-            "Vehicle Command Protocol required" in str(msg)
-            and not VEHICLE_COMMAND_PROXY_BASE
-        ):
-            if lang == "zh":
-                msg = (
-                    "当前车辆要求 Tesla Vehicle Command Protocol 签名。"
-                    "请先启动 vehicle-command 代理，并设置环境变量 "
-                    "VEHICLE_COMMAND_PROXY_BASE（例如 https://127.0.0.1:4443）"
-                )
-            else:
-                msg = (
-                    "This vehicle requires Tesla Vehicle Command Protocol signing. "
-                    "Start vehicle-command proxy and set VEHICLE_COMMAND_PROXY_BASE "
-                    "(for example https://127.0.0.1:4443)."
-                )
-        status = "error"
+    # Some commands are REST-only in the proxy, retry direct Fleet REST automatically.
+    if requires_rest and VEHICLE_COMMAND_PROXY_BASE:
+        fallback_resp = tesla_api.command_vehicle(vin_or_id, command, data=command_payload, force_direct=True)
+        fallback_status, fallback_msg, _ = _parse_command_response(fallback_resp)
+        if fallback_status == "ok":
+            status = "ok"
+            msg = "该指令已自动切换 REST API 执行成功" if lang == "zh" else "Auto-switched to REST API and succeeded"
+        else:
+            status = "error"
+            msg = fallback_msg
 
     return redirect(
         f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status={status}&cmd_message={urllib.parse.quote_plus(str(msg))}"
@@ -457,6 +499,13 @@ def vehicle(vid):
             "cmd_channel_proxy": "Command Proxy（已启用签名）",
             "cmd_channel_direct": "Fleet API 直连（可能被车辆拒绝）",
             "cmd_proxy_tip": "如遇 Protocol required，请启动 vehicle-command 并配置 VEHICLE_COMMAND_PROXY_BASE=https://127.0.0.1:4443",
+            "execute": "执行",
+            "payload_optional": "可选 JSON 参数",
+            "all_live": "全部命令均已可执行",
+            "quick_actions": "常用快捷操作",
+            "human_tip": "先点按钮即可，只有需要时再展开高级参数填写 JSON。",
+            "adv_params": "高级参数（可选）",
+            "example": "示例",
         },
         "en": {
             "dashboard": "Vehicle Dashboard",
@@ -502,6 +551,13 @@ def vehicle(vid):
             "cmd_channel_proxy": "Command Proxy (signed)",
             "cmd_channel_direct": "Direct Fleet API (may be rejected by vehicle)",
             "cmd_proxy_tip": "If you see Protocol required, run vehicle-command and set VEHICLE_COMMAND_PROXY_BASE=https://127.0.0.1:4443",
+            "execute": "Run",
+            "payload_optional": "Optional JSON payload",
+            "all_live": "All commands are executable",
+            "quick_actions": "Quick Actions",
+            "human_tip": "Tap Run directly; only open advanced params when needed.",
+            "adv_params": "Advanced Params (Optional)",
+            "example": "Example",
         },
     }[lang]
 
@@ -624,10 +680,12 @@ def vehicle(vid):
     if cmd_status:
         feedback_color = "#d1fae5" if cmd_status == "ok" else "#fee2e2" if cmd_status == "error" else "#fef3c7"
         feedback_bg = "rgba(16,185,129,0.18)" if cmd_status == "ok" else "rgba(239,68,68,0.18)" if cmd_status == "error" else "rgba(245,158,11,0.18)"
+        cmd_label = html.escape(cmd or "--")
+        msg_label = html.escape(cmd_message or "--")
         command_feedback_html = (
             f"<div style='margin:10px 0 16px;padding:10px 12px;border-radius:10px;border:1px solid rgba(148,163,184,0.28);"
             f"background:{feedback_bg};color:{feedback_color};font-size:13px;'>"
-            f"<b>{i18n['cmd_result']}:</b> <code>{cmd or '--'}</code> - {cmd_message or '--'}"
+            f"<b>{i18n['cmd_result']}:</b> <code>{cmd_label}</code> - {msg_label}"
             f"</div>"
         )
 
@@ -668,25 +726,125 @@ def vehicle(vid):
             "remote_boombox",
         ],
     }
-    implemented_commands = {"auto_conditioning_start", "auto_conditioning_stop"}
-
-    def pretty_command_name(name):
-        return name.replace("_", " ").title()
+    command_desc_zh = {
+        "actuate_trunk": "控制前备箱或后备箱开关",
+        "add_charge_schedule": "新增充电计划",
+        "add_precondition_schedule": "新增预处理计划",
+        "adjust_volume": "调节媒体音量",
+        "auto_conditioning_start": "开启空调",
+        "auto_conditioning_stop": "关闭空调",
+        "cancel_software_update": "取消软件更新倒计时",
+        "charge_max_range": "切换到最大续航充电模式",
+        "charge_port_door_close": "关闭充电口盖",
+        "charge_port_door_open": "打开充电口盖",
+        "charge_standard": "切换到标准充电模式",
+        "charge_start": "开始充电",
+        "charge_stop": "停止充电",
+        "clear_pin_to_drive_admin": "管理员清除 PIN to Drive",
+        "door_lock": "锁车",
+        "door_unlock": "解锁车门",
+        "erase_user_data": "清除车机用户数据",
+        "flash_lights": "闪灯",
+        "guest_mode": "设置访客模式",
+        "honk_horn": "鸣笛",
+        "media_next_fav": "切换到下一收藏媒体",
+        "media_next_track": "切换到下一曲",
+        "media_prev_fav": "切换到上一收藏媒体",
+        "media_prev_track": "切换到上一曲",
+        "media_toggle_playback": "播放/暂停切换",
+        "media_volume_down": "降低音量一档",
+        "navigation_gps_request": "导航到坐标点",
+        "navigation_request": "发送地点到车载导航",
+        "navigation_sc_request": "导航到超充站",
+        "navigation_waypoints_request": "发送多途经点导航",
+        "remote_auto_seat_climate_request": "设置座椅自动冷热",
+        "remote_auto_steering_wheel_heat_climate_request": "设置方向盘自动加热",
+        "remote_boombox": "外放音效（Boombox）",
+        "remote_seat_cooler_request": "设置座椅通风等级",
+        "remote_seat_heater_request": "设置座椅加热等级",
+        "remote_start_drive": "远程启动车辆",
+        "remote_steering_wheel_heat_level_request": "设置方向盘加热等级",
+        "remote_steering_wheel_heater_request": "开关方向盘加热",
+        "remove_charge_schedule": "删除充电计划",
+        "remove_precondition_schedule": "删除预处理计划",
+        "reset_pin_to_drive_pin": "重置 PIN to Drive",
+        "reset_valet_pin": "重置代客模式 PIN",
+        "schedule_software_update": "安排软件更新时间",
+        "set_bioweapon_mode": "设置生化防御模式",
+        "set_cabin_overheat_protection": "设置座舱过热保护",
+        "set_charge_limit": "设置充电上限",
+        "set_charging_amps": "设置充电电流",
+        "set_climate_keeper_mode": "设置空调保持模式",
+        "set_cop_temp": "设置过热保护温度档位",
+        "set_pin_to_drive": "设置 PIN to Drive",
+        "set_preconditioning_max": "设置预处理覆盖",
+        "set_scheduled_charging": "设置定时充电完成时间",
+        "set_scheduled_departure": "设置定时出发",
+        "set_sentry_mode": "开关哨兵模式",
+        "set_temps": "设置主副驾温度",
+        "set_valet_mode": "开关代客模式",
+        "set_vehicle_name": "设置车辆名称",
+        "speed_limit_activate": "启用限速模式",
+        "speed_limit_clear_pin": "清除限速模式 PIN",
+        "speed_limit_clear_pin_admin": "管理员清除限速 PIN",
+        "speed_limit_deactivate": "停用限速模式",
+        "speed_limit_set_limit": "设置限速值",
+        "sun_roof_control": "控制天窗状态",
+        "trigger_homelink": "触发 HomeLink",
+        "upcoming_calendar_entries": "同步近期日历事项",
+        "window_control": "控制车窗开合",
+    }
+    command_payload_example = {
+        "actuate_trunk": '{"which_trunk":"front"}',
+        "set_charge_limit": '{"percent":80}',
+        "set_charging_amps": '{"charging_amps":16}',
+        "set_temps": '{"driver_temp":22,"passenger_temp":22}',
+        "set_sentry_mode": '{"on":true}',
+        "window_control": '{"command":"vent","lat":31.23,"lon":121.47}',
+        "set_climate_keeper_mode": '{"climate_keeper_mode":1}',
+        "set_bioweapon_mode": '{"on":true}',
+        "navigation_gps_request": '{"lat":31.2304,"lon":121.4737}',
+        "navigation_request": '{"type":"share_ext_content_raw","value":"上海虹桥站"}',
+        "set_vehicle_name": '{"vehicle_name":"我的特斯拉"}',
+        "set_valet_mode": '{"on":true,"password":"1234"}',
+        "set_pin_to_drive": '{"pin":"1234"}',
+        "speed_limit_set_limit": '{"limit_mph":65}',
+        "remote_seat_heater_request": '{"heater":0,"level":3}',
+        "remote_seat_cooler_request": '{"seat_position":0,"seat_cooler_level":3}',
+        "remote_steering_wheel_heater_request": '{"on":true}',
+        "remote_steering_wheel_heat_level_request": '{"level":2}',
+        "add_charge_schedule": '{"start_enabled":true,"start_time":120}',
+        "remove_charge_schedule": '{"id":1}',
+        "add_precondition_schedule": '{"days_of_week":"1111100","precondition_time":480}',
+        "remove_precondition_schedule": '{"id":1}',
+        "schedule_software_update": '{"offset_sec":60}',
+        "sun_roof_control": '{"state":"vent"}',
+        "trigger_homelink": '{"lat":31.23,"lon":121.47}',
+        "remote_boombox": '{"sound":2000}',
+    }
 
     command_groups_html = []
     for category, commands in command_catalog.items():
         rows = []
         for name in commands:
-            if name in implemented_commands:
-                rows.append(
-                    f"<div class='cmd-item implemented'><div><code>{name}</code><div class='muted'>{pretty_command_name(name)}</div></div>"
-                    f"<span class='pill ok'>{i18n['implemented']}</span></div>"
-                )
-            else:
-                rows.append(
-                    f"<div class='cmd-item pending'><div><code>{name}</code><div class='muted'>{pretty_command_name(name)}</div></div>"
-                    f"<span class='pill'>{i18n['pending']}</span></div>"
-                )
+            example_payload = command_payload_example.get(name, "")
+            rows.append(
+                f"<form class='cmd-human' method='post' action='/vehicle/{vid}/command/{name}'>"
+                f"<div class='cmd-human-head'>"
+                f"<div class='cmd-human-title'>{command_desc_zh.get(name, '车辆指令')}</div>"
+                f"<div class='cmd-human-sub'><code>{name}</code></div>"
+                f"</div>"
+                f"<div class='cmd-human-action'>"
+                f"<input type='hidden' name='lang' value='{lang}'>"
+                f"<button type='submit' class='action-btn mini'>{i18n['execute']}</button>"
+                f"</div>"
+                f"<details class='cmd-adv'>"
+                f"<summary>{i18n['adv_params']}</summary>"
+                f"<input class='payload-input' name='payload' placeholder='{i18n['payload_optional']}'>"
+                f"<div class='muted'>{i18n['example']}: <code>{example_payload or '{}'} </code></div>"
+                f"</details>"
+                f"</form>"
+            )
         command_groups_html.append(
             f"<div class='cmd-group'><h4>{category}</h4><div class='cmd-list'>{''.join(rows)}</div></div>"
         )
@@ -698,8 +856,11 @@ def vehicle(vid):
             <b>{i18n['cmd_channel']}:</b>
             {"<code>" + i18n["cmd_channel_proxy"] + "</code> " + f"({VEHICLE_COMMAND_PROXY_BASE})" if VEHICLE_COMMAND_PROXY_BASE else "<code>" + i18n["cmd_channel_direct"] + "</code>"}
             <div style="margin-top:4px;">{i18n['cmd_proxy_tip']}</div>
+            <div style="margin-top:4px;color:#d1fae5;">{i18n['all_live']}</div>
+            <div style="margin-top:4px;">{i18n['human_tip']}</div>
         </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="muted" style="margin-bottom:8px;"><b>{i18n['quick_actions']}</b></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
             <form method="post" action="/vehicle/{vid}/command/auto_conditioning_start">
                 <input type="hidden" name="lang" value="{lang}">
                 <button type="submit" class="action-btn">{i18n['turn_ac_on']}</button>
@@ -716,7 +877,7 @@ def vehicle(vid):
 
     table_rows = render_dict(vehicle_info)
 
-    html = f"""
+    page_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -833,6 +994,12 @@ def vehicle(vid):
             background: rgba(30,41,59,0.9);
             border-color: rgba(148,163,184,0.45);
         }}
+        .action-btn.mini {{
+            padding: 7px 10px;
+            font-size: 12px;
+            min-width: 58px;
+            height: 34px;
+        }}
         .cmd-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -854,7 +1021,52 @@ def vehicle(vid):
         .cmd-list {{
             display: grid;
             grid-template-columns: 1fr;
-            gap: 6px;
+            gap: 10px;
+        }}
+        .cmd-human {{
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: center;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(148,163,184,0.2);
+            background: rgba(15,23,42,0.55);
+        }}
+        .cmd-human-head {{
+            min-width: 0;
+        }}
+        .cmd-human-title {{
+            font-size: 13px;
+            color: #e2e8f0;
+            font-weight: 600;
+        }}
+        .cmd-human-sub {{
+            margin-top: 2px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }}
+        .cmd-human-sub code {{
+            color: #93c5fd;
+            word-break: break-all;
+        }}
+        .cmd-human-action {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .cmd-adv {{
+            grid-column: 1 / -1;
+            margin-top: 2px;
+            padding-top: 4px;
+            border-top: 1px dashed rgba(148,163,184,0.25);
+        }}
+        .cmd-adv summary {{
+            cursor: pointer;
+            color: #cbd5e1;
+            font-size: 12px;
+            user-select: none;
+            margin-bottom: 6px;
         }}
         .cmd-item {{
             display: flex;
@@ -876,6 +1088,16 @@ def vehicle(vid):
             font-size: 11px;
             color: #cbd5e1;
             word-break: break-all;
+        }}
+        .payload-input {{
+            width: 100%;
+            margin-top: 6px;
+            border-radius: 7px;
+            border: 1px solid rgba(148,163,184,0.3);
+            background: rgba(15,23,42,0.8);
+            color: #e5e7eb;
+            font-size: 12px;
+            padding: 6px 8px;
         }}
         .raw {{
             margin-top: 18px; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 14px;
@@ -1027,7 +1249,7 @@ def vehicle(vid):
     </body>
     </html>
     """
-    return html
+    return page_html
 
 
 @app.route('/.well-known/appspecific/<path:filename>')

@@ -50,7 +50,7 @@
 2. 在 `developer.tesla.cn` 创建应用并拿到：
    - `CLIENT_ID`
    - `CLIENT_SECRET`
-3. 安装 `ngrok`
+3. （可选，本地联调）安装 `ngrok`
 4. Python 3.10+
 5. （指令签名推荐）`vehicle-command` proxy
 
@@ -193,13 +193,13 @@ cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"
 python tesla_oauth_demo.py
 ```
 
-### 6.2 启动 ngrok
+### 6.2 启动 ngrok（仅本地开发需要）
 
 ```bash
 ngrok http 8080
 ```
 
-把 ngrok 域名填回：
+把 ngrok 域名填回（仅本地调试时需要）：
 
 - Tesla 开发者后台 `Allowed Origin` / `Redirect URI`
 - 代码中的 `REDIRECT_URI`
@@ -247,56 +247,22 @@ python tesla_oauth_demo.py
 
 ---
 
-## 8. 部署到 Vercel
+## 8. 页面入口
 
-项目已包含 Vercel 所需文件：
-
-- `vercel.json`
-- `api/index.py`
-- `requirements.txt`
-
-### 8.1 在 Vercel 设置环境变量
-
-至少配置以下变量（Production / Preview 都建议配置）：
-
-- `TESLA_CLIENT_ID`
-- `TESLA_CLIENT_SECRET`
-- `TESLA_REDIRECT_URI`（示例：`https://<你的-vercel-domain>/auth/callback`）
-- `FLASK_SECRET_KEY`（必配；用于 OAuth state 的 session 签名）
-- `VEHICLE_COMMAND_PROXY_BASE`（可选；远程签名代理地址）
-- `VEHICLE_COMMAND_PROXY_INSECURE`（可选；默认 `1` 仅用于开发）
-
-### 8.2 部署后回填 Tesla 开发者后台
-
-把 Vercel 域名回填到应用配置：
-
-- Allowed Origin: `https://<你的-vercel-domain>`
-- Redirect URI: `https://<你的-vercel-domain>/auth/callback`
-
-并确保以下地址可公开访问：
-
-- `https://<你的-vercel-domain>/.well-known/appspecific/com.tesla.3p.public-key.pem`
-
-### 8.3 验证
-
-- 打开 `https://<你的-vercel-domain>`
-- 点击登录并完成授权
-- 首页出现车辆列表
-- 进入车辆详情页后测试“开启空调”等指令
-
----
-
-## 9. 页面入口
-
-- 首页：`https://<你的-ngrok-domain>`
-- 车辆详情：点击车辆进入看板与指令面板
+- 本地开发：
+  - 首页：`https://<你的-ngrok-domain>`
+  - 回调：`https://<你的-ngrok-domain>/auth/callback`
+- 生产环境：
+  - 首页：`https://<你的正式域名>`（例如 `https://fleet-api.dev.xrunda.com`）
+  - 回调：`https://<你的正式域名>/auth/callback`
+- 车辆详情：点击列表中的车辆进入看板与指令面板
 - 语言切换：
   - 中文：`?lang=zh`
   - 英文：`?lang=en`
 
 ---
 
-## 10. 常见问题
+## 9. 常见问题
 
 ### `Vehicle Command Protocol required`
 
@@ -315,36 +281,7 @@ python tesla_oauth_demo.py
 
 ---
 
-## 11. Vercel 生产安全清单
-
-上线前建议逐项勾选：
-
-- [ ] **环境变量隔离**：仅在 Vercel 环境变量中保存 `TESLA_CLIENT_SECRET`，不要写回仓库。
-- [ ] **Session 密钥固定**：生产环境必须设置 `FLASK_SECRET_KEY`，不要使用默认值。
-- [ ] **回调地址一致**：`TESLA_REDIRECT_URI` 与 Tesla 开发者后台 `Redirect URI` 完全一致（协议/域名/路径）。
-- [ ] **Origin 最小化**：Tesla 后台只保留生产域名与必要预发域名，删除历史 ngrok/临时域名。
-- [ ] **Proxy TLS 开启校验**：生产建议 `VEHICLE_COMMAND_PROXY_INSECURE=0`，并配置 `VEHICLE_COMMAND_PROXY_CA_CERT`。
-- [ ] **最小权限原则**：应用 scopes 只保留实际需要，避免长期开放不使用的高权限命令 scope。
-- [ ] **密钥轮换机制**：定期轮换 `TESLA_CLIENT_SECRET` 与 Fleet 私钥，并验证 `.well-known` 公钥可访问。
-- [ ] **日志脱敏**：不要在日志打印 token、secret、完整 Authorization 头。
-- [ ] **错误监控**：在 Vercel 配置告警，重点关注 401/403、5xx、timeout、`Protocol required` 异常。
-- [ ] **指令风控**：对高风险命令（如清除数据、PIN、代客模式）建议加二次确认或管理员开关。
-
-推荐生产环境变量示例：
-
-```bash
-TESLA_CLIENT_ID=xxx
-TESLA_CLIENT_SECRET=xxx
-TESLA_REDIRECT_URI=https://<prod-domain>/auth/callback
-FLASK_SECRET_KEY=<strong-random-secret>
-VEHICLE_COMMAND_PROXY_BASE=https://<proxy-domain>
-VEHICLE_COMMAND_PROXY_INSECURE=0
-VEHICLE_COMMAND_PROXY_CA_CERT=/var/task/certs/proxy-ca.pem
-```
-
----
-
-## 12. 配图
+## 10. 配图
 
 开发者后台配置示例：
 
@@ -356,4 +293,3 @@ VEHICLE_COMMAND_PROXY_CA_CERT=/var/task/certs/proxy-ca.pem
 ![Dashboard](imgs/ScreenShot_2026-02-24_101423_340.png)
 ![Commands](imgs/ScreenShot_2026-02-24_101447_480.png)
 ![Latest Commands Panel](imgs/ScreenShot_2026-02-24_101852_000.png)
-![Vercel Deployment](imgs/vercel_deployment_latest.png)

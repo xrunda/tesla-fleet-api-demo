@@ -1,127 +1,183 @@
+# Tesla Fleet API Demo（中国区）
 
-# Tesla Fleet API Demonstration
+这是一个基于 Flask 的 Tesla Fleet API 演示项目，已支持：
 
-Quad Cities Tesla Guy and I built this repository to help you my viewers, and hopefully new subscribers to understand how to use the Tesla Fleet API similar to how I used it as part of the qcteslaguy.com  website.
+- OAuth 登录（中国区 `auth.tesla.cn`）
+- 车辆列表与车辆详情可视化看板
+- 中英文切换（`?lang=zh` / `?lang=en`）
+- 车辆指令面板（全量命令入口）
+- 可选 JSON 参数输入 + 一键填入示例
+- Command Proxy 签名通道 + 自动 REST 回退（部分命令）
 
-This demo we will create an integration that lets you see your Tesla vehicle data from the official Tesla Fleet API, which could lead to other integrations in whatever way you can imagine. You could potentially get data from your vehicle, send commands like start climate, unlock/lock doors, set charging rates, similar to what you can do in Tessie or Home Assistant.
+![指令面板最新效果](imgs/ScreenShot_2026-02-24_101423_340.png)
 
-With the new official Tesla Fleet integration at your fingertips, you can now control core vehicle functions directly from your own websites, iphone apps, elgato stream deck, or anything else you can dream of. You can do far more than monitor your tesla if you want, you could allow a secure website integration or create a similar Stream Deck plugin that would give you the ability to control whatever features Tesla makes available through the core API's, which they expose and make available to owners and businesses.
+---
 
-In this guide, I’ll walk you through every step to get started.
+## 1. 当前能力概览
 
-- We will cover prerequisites
-- Generate a Public/Private Key Pair
-- Install NGROK as a temp solution for local development
-- Access or Create a Tesla Account 
-- Create a New Tesla Fleet API Application
-- Testing our Fleet API with our Sample Python Web Application
-- Installing our Key on the Vehicle for Future Command integration
+### 数据看板
 
+- 电池/续航/充电状态
+- 驾驶状态（速度、档位、功率）
+- 空调与温度
+- 安全状态（锁车、哨兵、代客）
+- 胎压、里程、软件版本、定位
+- 原始数据折叠查看
 
-## Prerequisites
+### 指令面板
 
-1. Tesla Account with at least one vehicle or energy product
-2. Tesla provides $10/month free API credit, but you must add a credit card for overages
-3. A way to run curl commands against the tesla endpoints
-4. A way to tunnel a secure (SSL) connection to your localhost runnig on port 8080, I used ngrok to setup my forwarding 
+- 所有已接入命令均可点击执行
+- 每条命令有中文描述（命令名保留英文）
+- 高级参数区支持可选 JSON
+- 一键填入示例参数，降低输入成本
 
-### Step 1: Generate a Public/Private Key Pair
-From a terminal
-```
+---
+
+## 2. 目录结构
+
+- `tesla_oauth_demo.py`：主程序（OAuth、车辆数据、指令执行、UI）
+- `get_partner_token.sh`：注册 partner domain 脚本
+- `.well-known/appspecific/com.tesla.3p.public-key.pem`：对外公钥
+- `private-key.pem` / `public-key.pem`：本地密钥
+- `imgs/`：README 配图
+
+---
+
+## 3. 前置要求
+
+1. 中国区 Tesla 账号（`tesla.cn`）
+2. 在 `developer.tesla.cn` 创建应用并拿到：
+   - `CLIENT_ID`
+   - `CLIENT_SECRET`
+3. 安装 `ngrok`
+4. Python 3.10+
+5. （指令签名推荐）`vehicle-command` proxy
+
+---
+
+## 4. 配置应用
+
+编辑 `tesla_oauth_demo.py` 顶部配置：
+
+- `CLIENT_ID`
+- `CLIENT_SECRET`
+- `REDIRECT_URI`（必须与开发者后台一致）
+
+中国区固定配置已内置：
+
+- `FLEET_API_BASE = https://fleet-api.prd.cn.vn.cloud.tesla.cn`
+- `AUTH_AUTHORIZE_BASE = https://auth.tesla.cn`
+- `AUTH_TOKEN_URL = https://auth.tesla.cn/oauth2/v3/token`
+
+---
+
+## 5. 生成并发布公钥
+
+```bash
+cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"
+
 openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
 openssl ec -in private-key.pem -pubout -out public-key.pem
-mkdir .well-known/appspecific
+mkdir -p .well-known/appspecific
 cp public-key.pem .well-known/appspecific/com.tesla.3p.public-key.pem
 ```
 
-### Step 2: Install NGROK as a temp solution for local development
+---
 
-Go to [NGROK.com](https://ngrok.com/) and setup a free account.
-Download and install the ngrok cli for your computer.
-Run `ngrok http 8080` and expect output like the following:
-```
-�  One gateway for every AI model. Available in early access *now*: https://ngrok.com/r/ai                                                                                                                                                                                                                                                                                                     Session Status                online                                                                                                                                                            Account                       qcteslaguy@gmail.com (Plan: Free)                                                                                                                                 Version                       3.34.1                                                                                                                                                            Region                        United States (us)                                                                                                                                                Web Interface                 http://127.0.0.1:4040                                                                                                                                             Forwarding                    https://your-uinique-ngrok-name.ngrok-free.dev -> http://localhost:8080                                                                                                                                                                                                                                                                                         Connections                   ttl     opn     rt1     rt5     p50     p90                                                                                                                                                     0       0       0.00    0.00    0.00    0.00
-```
-The forwarding line will have a value like `https://your-uinique-ngrok-name.ngrok-free.dev -> http://localhost:8080`
+## 6. 启动服务（基础数据能力）
 
-The your-uinique-ngrok-name.ngrok-free.dev is the url you will need to access and setup the demo.
+### 6.1 启动 Flask
 
-### Step 3: Access or Create a Tesla Account 
-
-Go to [developer.tesla.com](https://developer.tesla.com) and login.
-
-If you have a Tesla the owner has an tesla.com login. I also recommend setting up MFA if you have not done so yet.
-
-If you don't have a Tesla buy one using my referal to save up to $1000 on a vehicle. However, this tutorial may not be for you if you don't have a Tesla Vehicle already.
-
-[👉 Quad Cities Tesla Guy Refereal Link](https://ts.la/patrick360645)
-
-### Step 5: Create a new Tesla Fleet API Application
-
-1. **Go to**: https://developer.tesla.com/
-2. **Sign in** with your Tesla account
-3. **Create a new application**:
-   - Application Name: "MyDemoApp"
-   - Description: "A demo application"
-   - Allowed Origin(s): `https://your-uinique-ngrok-name.ngrok-free.dev`
-   - Redirect URI: `https://your-uinique-ngrok-name.ngrok-free.dev/auth/callback`
-    ![Tesla Developer Portal - Credentials and APIs](imgs/credentials_and_apis.png)
-   - Scopes needed: Profile info, Vehicle: info, location, commands, charging management
-     ![Teslag Developer Portal - API and Scopes](imgs/api_and_scopes.png)
-
-### Step 5: Run Our Example Python Web Application
-
-1. Replace the following values
-```python
-CLIENT_ID = "your-tesla-client-id"
-CLIENT_SECRET = "your-tesla-client-secret"
-REDIRECT_URI = "https://your-unique-ngrok-name.ngrok-free.dev"
-```
-2. Start the python app in a new termial `python tesla_oauth_demo.py`
-3. Visit: [Our Local Application](https://your-uinique-ngrok-name.ngrok-free.dev) app will work in browser but not from the fleet api
-
-
-#### Step 4: Register with partner used ngrok to create a public endpoint
-
-Now that we have our python web application running and our ngrok public domain tunneling to our our locally running application we should be able to register our partner application.
-
-Change the `AUDIENCE` value below to one of the following based on your location. For more information see the Fleet API Documentation.
-
-- North America & Asia-Pacific (excluding China): `https://fleet-api.prd.na.vn.cloud.tesla.com`
-- Europe, Middle East & Africa: `https://fleet-api.prd.eu.vn.cloud.tesla.com`
-- China (中国大陆车辆): `https://fleet-api.prd.cn.vn.cloud.tesla.cn`
-
-```
-CLIENT_ID='your-tesla-client-id'
-CLIENT_SECRET='your-tesla-client-secret'
-AUDIENCE='https://fleet-api.prd.na.vn.cloud.tesla.com' 
-
-response=$(curl --request POST --ssl-no-revoke \
-  --header 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode 'grant_type=client_credentials' \
-  --data-urlencode "client_id=$CLIENT_ID" \
-  --data-urlencode "client_secret=$CLIENT_SECRET" \
-  --data-urlencode 'scope=openid vehicle_device_data' \
-  --data-urlencode "audience=$AUDIENCE" \
-  'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token')
-
-ACCESS_TOKEN=$(echo $response | jq -r '.access_token')
-
-curl --location "$AUDIENCE/api/1/partner_accounts" \
-  --ssl-no-revoke \
-  --header 'Content-Type: application/json' \
-  --header "Authorization: Bearer $ACCESS_TOKEN" \
-  --data '{
-    "domain": "your-unique-ngrok-name.ngrok-free.dev"
-}'
+```bash
+cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"
+python tesla_oauth_demo.py
 ```
 
-### Step 5: Install on your Vehicle
+### 6.2 启动 ngrok
 
-So far we have setup the ability to get vehicle data, but if you want to send commands in the future to your Tesla vehicle you will need to complete this last step, and install the private key in your vehicle to allow secure command communication.
+```bash
+ngrok http 8080
+```
 
-Navigate to the tesla com site using the following link
-https://tesla.com/_ak/your-unique-ngrok-name.ngrok-free.dev
+把 ngrok 域名填回：
 
+- Tesla 开发者后台 `Allowed Origin` / `Redirect URI`
+- 代码中的 `REDIRECT_URI`
 
+### 6.3 注册 partner domain
 
+```bash
+cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"
+bash get_partner_token.sh
+```
+
+---
+
+## 7. 指令签名（推荐）
+
+对于大量新车型，车辆指令需要 Tesla Vehicle Command Protocol 签名。  
+建议启动 `tesla-http-proxy` 后再执行命令。
+
+### 7.1 启动 proxy（示例）
+
+```bash
+~/go/bin/tesla-http-proxy \
+  -tls-key "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo/config/tls-key.pem" \
+  -cert "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo/config/tls-cert.pem" \
+  -key-file "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo/config/fleet-key.pem" \
+  -host 127.0.0.1 \
+  -port 4443
+```
+
+### 7.2 启动 Flask（连接 proxy）
+
+```bash
+cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"
+export VEHICLE_COMMAND_PROXY_BASE="https://127.0.0.1:4443"
+export VEHICLE_COMMAND_PROXY_INSECURE="1"
+python tesla_oauth_demo.py
+```
+
+---
+
+## 8. 页面入口
+
+- 首页：`https://<你的-ngrok-domain>`
+- 车辆详情：点击车辆进入看板与指令面板
+- 语言切换：
+  - 中文：`?lang=zh`
+  - 英文：`?lang=en`
+
+---
+
+## 9. 常见问题
+
+### `Vehicle Command Protocol required`
+
+- 含义：车辆要求签名命令
+- 处理：启动 `vehicle-command` proxy，并设置 `VEHICLE_COMMAND_PROXY_BASE`
+
+### `command requires using the REST API`
+
+- 含义：该命令应走 REST API
+- 当前代码：已支持自动回退尝试
+
+### `JSON 参数格式错误，请检查 payload`
+
+- 含义：高级参数里的 JSON 不合法
+- 建议：先点“一键填入”再改字段
+
+---
+
+## 10. 配图
+
+开发者后台配置示例：
+
+![Credentials & APIs](imgs/credentials_and_apis.png)
+![API Scopes](imgs/api_and_scopes.png)
+
+当前项目 UI 示例：
+
+![Dashboard](imgs/ScreenShot_2026-02-24_101423_340.png)
+![Commands](imgs/ScreenShot_2026-02-24_101447_480.png)
+![Latest Commands Panel](imgs/ScreenShot_2026-02-24_101852_000.png)

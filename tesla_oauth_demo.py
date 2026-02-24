@@ -25,9 +25,6 @@ VEHICLE_COMMAND_PROXY_BASE = os.getenv("VEHICLE_COMMAND_PROXY_BASE", "").strip()
 VEHICLE_COMMAND_PROXY_CA_CERT = os.getenv("VEHICLE_COMMAND_PROXY_CA_CERT", "").strip()
 VEHICLE_COMMAND_PROXY_INSECURE = os.getenv("VEHICLE_COMMAND_PROXY_INSECURE", "1").strip() == "1"
 
-# 用于页面显示「是否与预期账号一致」（与 todo.md 中一致即可）
-EXPECTED_EMAIL = "317423621@qq.com"
-
 class TeslaAPI:
     def __init__(self, client_id, client_secret, redirect_uri, scopes):
         self.client_id = client_id
@@ -154,9 +151,6 @@ def index():
         "zh": {
             "title": "我的车辆",
             "login": "使用 Tesla 登录",
-            "expected": "预期账号",
-            "current": "当前登录",
-            "matched": "是否一致",
             "yes": "是",
             "no": "否",
             "config": "当前接口配置（中国区）",
@@ -168,9 +162,6 @@ def index():
         "en": {
             "title": "My Vehicles",
             "login": "Login with Tesla",
-            "expected": "Expected Account",
-            "current": "Current Login",
-            "matched": "Matched",
             "yes": "Yes",
             "no": "No",
             "config": "Current API Config (China)",
@@ -205,25 +196,6 @@ def index():
             tesla_api.user_info = user
 
     cars = tesla_api.get_vehicles()
-    # 账号展示：优先邮箱，其次 name/sub
-    display_parts = []
-    name = user.get("name") or user.get("preferred_username")
-    email = user.get("email") or user.get("email_address") or ""
-    subject = user.get("sub", "")
-    if name:
-        display_parts.append(name)
-    if email:
-        display_parts.append(email)
-    if not display_parts and subject:
-        display_parts.append(subject)
-    current_display = " / ".join(display_parts) if display_parts else subject or "—"
-    is_same = tt["yes"] if email and email.strip().lower() == EXPECTED_EMAIL.strip().lower() else tt["no"]
-    account_line = (
-        f"<p><b>{tt['expected']}:</b> {EXPECTED_EMAIL} &nbsp;|&nbsp; "
-        f"<b>{tt['current']}:</b> {current_display} &nbsp;|&nbsp; "
-        f"<b>{tt['matched']}:</b> {is_same}</p>"
-    )
-
     # 页面上打印当前中国区配置与请求信息，便于核对
     config_pre = (
         f"<details><summary><b>{tt['config']}</b></summary><pre style='background:#f0f0f0;padding:12px;font-size:12px;overflow:auto;'>"
@@ -261,7 +233,7 @@ def index():
             )
 
     lang_html = f"<p><b>{tt['lang']}:</b> <a href='/?lang=zh'>中文</a> | <a href='/?lang=en'>English</a></p>"
-    return f"<h1>{tt['title']}</h1>" + lang_html + account_line + config_pre + vehicles_html + debug_html
+    return f"<h1>{tt['title']}</h1>" + lang_html + config_pre + vehicles_html + debug_html
 
 @app.route("/auth/callback", strict_slashes=False)
 # @app.route("/auth/callback/", strict_slashes=False)

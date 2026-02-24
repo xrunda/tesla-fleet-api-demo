@@ -1271,4 +1271,4 @@ def well_known(filename):
     return send_from_directory(".well-known/appspecific", filename)
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=False)
+    app.run(port=8080, host='0.0.0.0', debug=False)

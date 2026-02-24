@@ -8,6 +8,7 @@
 - 车辆指令面板（全量命令入口）
 - 可选 JSON 参数输入 + 一键填入示例
 - Command Proxy 签名通道 + 自动 REST 回退（部分命令）
+- OpenClaw 友好 API（无鉴权版）：车辆列表、命令执行、描述与 OpenAPI
 
 ![指令面板最新效果](imgs/ScreenShot_2026-02-24_101423_340.png)
 
@@ -262,7 +263,21 @@ python tesla_oauth_demo.py
 
 ---
 
-## 9. 常见问题
+## 9. OpenClaw 集成 API（无鉴权版）
+
+当前已提供最简 API，便于 OpenClaw 机器人直接调用：
+
+- `GET /api/health`
+- `GET /api/openclaw/vehicles`
+- `POST /api/openclaw/command`
+- `GET /api/openclaw/describe`
+- `GET /api/openclaw/openapi.json`
+
+详细说明见：`OPENCLAW_API.md`
+
+---
+
+## 10. 常见问题
 
 ### `Vehicle Command Protocol required`
 
@@ -281,7 +296,7 @@ python tesla_oauth_demo.py
 
 ---
 
-## 10. 配图
+## 11. 配图
 
 开发者后台配置示例：
 

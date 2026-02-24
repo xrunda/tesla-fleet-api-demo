@@ -1,5 +1,5 @@
 
-from flask import Flask, redirect, request, Response, send_from_directory, session
+from flask import Flask, redirect, request, Response, send_from_directory, session, jsonify
 import secrets, requests, urllib.parse, time, os, base64, json
 import html
 
@@ -27,6 +27,30 @@ AUTH_TOKEN_URL = "https://auth.tesla.cn/oauth2/v3/token"
 VEHICLE_COMMAND_PROXY_BASE = os.getenv("VEHICLE_COMMAND_PROXY_BASE", "").strip().rstrip("/")
 VEHICLE_COMMAND_PROXY_CA_CERT = os.getenv("VEHICLE_COMMAND_PROXY_CA_CERT", "").strip()
 VEHICLE_COMMAND_PROXY_INSECURE = os.getenv("VEHICLE_COMMAND_PROXY_INSECURE", "1").strip() == "1"
+OPENCLAW_API_VERSION = "v1"
+SUPPORTED_VEHICLE_COMMANDS = {
+    "actuate_trunk", "add_charge_schedule", "add_precondition_schedule", "adjust_volume",
+    "auto_conditioning_start", "auto_conditioning_stop", "cancel_software_update",
+    "charge_max_range", "charge_port_door_close", "charge_port_door_open",
+    "charge_standard", "charge_start", "charge_stop", "clear_pin_to_drive_admin",
+    "door_lock", "door_unlock", "erase_user_data", "flash_lights", "guest_mode",
+    "honk_horn", "media_next_fav", "media_next_track", "media_prev_fav",
+    "media_prev_track", "media_toggle_playback", "media_volume_down",
+    "navigation_gps_request", "navigation_request", "navigation_sc_request",
+    "navigation_waypoints_request", "remote_auto_seat_climate_request",
+    "remote_auto_steering_wheel_heat_climate_request", "remote_boombox",
+    "remote_seat_cooler_request", "remote_seat_heater_request", "remote_start_drive",
+    "remote_steering_wheel_heat_level_request", "remote_steering_wheel_heater_request",
+    "remove_charge_schedule", "remove_precondition_schedule", "reset_pin_to_drive_pin",
+    "reset_valet_pin", "schedule_software_update", "set_bioweapon_mode",
+    "set_cabin_overheat_protection", "set_charge_limit", "set_charging_amps",
+    "set_climate_keeper_mode", "set_cop_temp", "set_pin_to_drive",
+    "set_preconditioning_max", "set_scheduled_charging", "set_scheduled_departure",
+    "set_sentry_mode", "set_temps", "set_valet_mode", "set_vehicle_name",
+    "speed_limit_activate", "speed_limit_clear_pin", "speed_limit_clear_pin_admin",
+    "speed_limit_deactivate", "speed_limit_set_limit", "sun_roof_control",
+    "trigger_homelink", "upcoming_calendar_entries", "window_control",
+}
 
 class TeslaAPI:
     def __init__(self, client_id, client_secret, redirect_uri, scopes):
@@ -143,6 +167,75 @@ class TeslaAPI:
             return None
 
 tesla_api = TeslaAPI(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SCOPES)
+
+
+def _clean_message(raw):
+    s = str(raw or "").replace("\ufffd", "").strip()
+    return " ".join(s.split())
+
+
+def _parse_command_http_response(resp_obj, lang="zh"):
+    if resp_obj is None:
+        fallback = "网络/TLS 异常" if lang == "zh" else "Network/TLS error"
+        return "error", tesla_api.last_network_error or fallback, False, {}
+    try:
+        payload_obj = resp_obj.json()
+    except Exception:
+        msg_local = resp_obj.text[:300] if resp_obj.text else ("空响应" if lang == "zh" else "Empty response")
+        return "error", _clean_message(msg_local), False, {}
+
+    result_local = False
+    reason_local = ""
+    if isinstance(payload_obj, dict):
+        response_obj = payload_obj.get("response", {})
+        if isinstance(response_obj, dict):
+            result_local = bool(response_obj.get("result", False))
+            reason_local = str(response_obj.get("reason", "") or "")
+
+    if resp_obj.status_code == 200 and result_local:
+        ok_msg = "指令已发送成功" if lang == "zh" else "Command sent successfully"
+        return "ok", ok_msg, False, payload_obj
+
+    error_description = payload_obj.get("error_description") if isinstance(payload_obj, dict) else ""
+    error_name = payload_obj.get("error") if isinstance(payload_obj, dict) else ""
+    msg_local = _clean_message(reason_local or error_description or error_name or ("指令执行失败" if lang == "zh" else "Command failed"))
+    requires_rest_api = "command requires using the REST API" in msg_local
+    if requires_rest_api:
+        msg_local = (
+            "该指令需通过 REST API 执行，已尝试自动回退。" if lang == "zh"
+            else "This command requires REST API and is being retried automatically."
+        )
+    return "error", msg_local, requires_rest_api, payload_obj
+
+
+def _resolve_vehicle_identifier(vehicle_id=None, vin=None):
+    vehicles = tesla_api.get_vehicles()
+    if vin:
+        vin_norm = str(vin).strip().upper()
+        vehicle = next((v for v in vehicles if str(v.get("vin", "")).upper() == vin_norm), None)
+        if vehicle:
+            return vehicle.get("vin") or vin_norm, vehicle
+    if vehicle_id:
+        vehicle = next(
+            (v for v in vehicles if str(v.get("id")) == str(vehicle_id) or str(v.get("vehicle_id")) == str(vehicle_id)),
+            None,
+        )
+        if vehicle:
+            return vehicle.get("vin") or str(vehicle_id), vehicle
+    return None, None
+
+
+def _execute_vehicle_command(vin_or_id, command, payload=None, lang="zh"):
+    resp = tesla_api.command_vehicle(vin_or_id, command, data=payload)
+    status, msg, requires_rest, parsed = _parse_command_http_response(resp, lang=lang)
+    if requires_rest and VEHICLE_COMMAND_PROXY_BASE:
+        fallback_resp = tesla_api.command_vehicle(vin_or_id, command, data=payload, force_direct=True)
+        fallback_status, fallback_msg, _, fallback_parsed = _parse_command_http_response(fallback_resp, lang=lang)
+        if fallback_status == "ok":
+            ok_msg = "该指令已自动切换 REST API 执行成功" if lang == "zh" else "Auto-switched to REST API and succeeded"
+            return "ok", ok_msg, fallback_parsed
+        return "error", fallback_msg, fallback_parsed
+    return status, msg, parsed
 
 @app.route("/")
 def index():
@@ -291,30 +384,7 @@ def vehicle_command(vid, command):
     if lang not in ("zh", "en"):
         lang = "zh"
 
-    supported_now = {
-        "actuate_trunk", "add_charge_schedule", "add_precondition_schedule", "adjust_volume",
-        "auto_conditioning_start", "auto_conditioning_stop", "cancel_software_update",
-        "charge_max_range", "charge_port_door_close", "charge_port_door_open",
-        "charge_standard", "charge_start", "charge_stop", "clear_pin_to_drive_admin",
-        "door_lock", "door_unlock", "erase_user_data", "flash_lights", "guest_mode",
-        "honk_horn", "media_next_fav", "media_next_track", "media_prev_fav",
-        "media_prev_track", "media_toggle_playback", "media_volume_down",
-        "navigation_gps_request", "navigation_request", "navigation_sc_request",
-        "navigation_waypoints_request", "remote_auto_seat_climate_request",
-        "remote_auto_steering_wheel_heat_climate_request", "remote_boombox",
-        "remote_seat_cooler_request", "remote_seat_heater_request", "remote_start_drive",
-        "remote_steering_wheel_heat_level_request", "remote_steering_wheel_heater_request",
-        "remove_charge_schedule", "remove_precondition_schedule", "reset_pin_to_drive_pin",
-        "reset_valet_pin", "schedule_software_update", "set_bioweapon_mode",
-        "set_cabin_overheat_protection", "set_charge_limit", "set_charging_amps",
-        "set_climate_keeper_mode", "set_cop_temp", "set_pin_to_drive",
-        "set_preconditioning_max", "set_scheduled_charging", "set_scheduled_departure",
-        "set_sentry_mode", "set_temps", "set_valet_mode", "set_vehicle_name",
-        "speed_limit_activate", "speed_limit_clear_pin", "speed_limit_clear_pin_admin",
-        "speed_limit_deactivate", "speed_limit_set_limit", "sun_roof_control",
-        "trigger_homelink", "upcoming_calendar_entries", "window_control",
-    }
-    if command not in supported_now:
+    if command not in SUPPORTED_VEHICLE_COMMANDS:
         msg = "未知或不支持的指令" if lang == "zh" else "Unknown or unsupported command"
         return redirect(
             f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
@@ -331,68 +401,195 @@ def vehicle_command(vid, command):
                 f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
             )
 
-    def _clean_msg(raw):
-        s = str(raw or "").replace("\ufffd", "").strip()
-        return " ".join(s.split())
+    vin_or_id, _ = _resolve_vehicle_identifier(vehicle_id=vid)
+    if not vin_or_id:
+        msg = "车辆不存在或不在当前账号下" if lang == "zh" else "Vehicle not found in current account"
+        return redirect(
+            f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status=error&cmd_message={urllib.parse.quote_plus(msg)}"
+        )
 
-    def _parse_command_response(resp_obj):
-        if resp_obj is None:
-            return ("error", tesla_api.last_network_error or ("网络/TLS 异常" if lang == "zh" else "Network/TLS error"), False)
-        try:
-            payload_obj = resp_obj.json()
-        except Exception:
-            msg_local = resp_obj.text[:300] if resp_obj.text else ("空响应" if lang == "zh" else "Empty response")
-            return ("error", _clean_msg(msg_local), False)
-
-        result_local = False
-        reason_local = ""
-        if isinstance(payload_obj, dict):
-            response_obj = payload_obj.get("response", {})
-            if isinstance(response_obj, dict):
-                result_local = bool(response_obj.get("result", False))
-                reason_local = str(response_obj.get("reason", "") or "")
-
-        if resp_obj.status_code == 200 and result_local:
-            return ("ok", "指令已发送成功" if lang == "zh" else "Command sent successfully", False)
-
-        error_description = payload_obj.get("error_description") if isinstance(payload_obj, dict) else ""
-        error_name = payload_obj.get("error") if isinstance(payload_obj, dict) else ""
-        msg_local = _clean_msg(reason_local or error_description or error_name or ("指令执行失败" if lang == "zh" else "Command failed"))
-        requires_rest_api = "command requires using the REST API" in msg_local
-
-        if requires_rest_api:
-            msg_local = (
-                "该指令需通过 REST API 执行，已尝试自动回退。" if lang == "zh"
-                else "This command requires REST API and is being retried automatically."
-            )
-        elif "Vehicle Command Protocol required" in msg_local and not VEHICLE_COMMAND_PROXY_BASE:
-            msg_local = (
-                "当前车辆要求 Tesla Vehicle Command Protocol 签名。请先启动 vehicle-command 代理，并设置 VEHICLE_COMMAND_PROXY_BASE（例如 https://127.0.0.1:4443）"
-                if lang == "zh"
-                else "This vehicle requires Tesla Vehicle Command Protocol signing. Start vehicle-command proxy and set VEHICLE_COMMAND_PROXY_BASE (for example https://127.0.0.1:4443)."
-            )
-        return ("error", msg_local, requires_rest_api)
-
-    vehicles = tesla_api.get_vehicles()
-    vehicle = next((v for v in vehicles if str(v.get("id")) == str(vid)), {})
-    vin_or_id = vehicle.get("vin") or vid
-    resp = tesla_api.command_vehicle(vin_or_id, command, data=command_payload)
-    status, msg, requires_rest = _parse_command_response(resp)
-
-    # Some commands are REST-only in the proxy, retry direct Fleet REST automatically.
-    if requires_rest and VEHICLE_COMMAND_PROXY_BASE:
-        fallback_resp = tesla_api.command_vehicle(vin_or_id, command, data=command_payload, force_direct=True)
-        fallback_status, fallback_msg, _ = _parse_command_response(fallback_resp)
-        if fallback_status == "ok":
-            status = "ok"
-            msg = "该指令已自动切换 REST API 执行成功" if lang == "zh" else "Auto-switched to REST API and succeeded"
-        else:
-            status = "error"
-            msg = fallback_msg
+    status, msg, _ = _execute_vehicle_command(vin_or_id, command, payload=command_payload, lang=lang)
+    if "Vehicle Command Protocol required" in msg and not VEHICLE_COMMAND_PROXY_BASE:
+        msg = (
+            "当前车辆要求 Tesla Vehicle Command Protocol 签名。请先启动 vehicle-command 代理，并设置 VEHICLE_COMMAND_PROXY_BASE（例如 https://127.0.0.1:4443）"
+            if lang == "zh"
+            else "This vehicle requires Tesla Vehicle Command Protocol signing. Start vehicle-command proxy and set VEHICLE_COMMAND_PROXY_BASE (for example https://127.0.0.1:4443)."
+        )
 
     return redirect(
         f"/vehicle/{vid}?lang={lang}&cmd={command}&cmd_status={status}&cmd_message={urllib.parse.quote_plus(str(msg))}"
     )
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({
+        "ok": True,
+        "service": "tesla-fleet-api-demo",
+        "api_version": OPENCLAW_API_VERSION,
+        "timestamp": int(time.time()),
+    })
+
+
+@app.route("/api/openclaw/vehicles", methods=["GET"])
+def api_openclaw_vehicles():
+    vehicles = tesla_api.get_vehicles()
+    items = [
+        {
+            "id": v.get("id"),
+            "vehicle_id": v.get("vehicle_id"),
+            "vin": v.get("vin"),
+            "display_name": v.get("display_name"),
+            "state": v.get("state"),
+        }
+        for v in vehicles
+    ]
+    return jsonify({
+        "ok": True,
+        "count": len(items),
+        "vehicles": items,
+    })
+
+
+@app.route("/api/openclaw/command", methods=["POST"])
+def api_openclaw_command():
+    data = request.get_json(silent=True) or {}
+    command = str(data.get("command") or "").strip()
+    vehicle_id = data.get("vehicle_id")
+    vin = data.get("vin")
+    payload = data.get("payload")
+    lang = str(data.get("lang") or "zh").strip().lower()
+    if lang not in ("zh", "en"):
+        lang = "zh"
+
+    if not command:
+        return jsonify({"ok": False, "error": "command is required"}), 400
+    if command not in SUPPORTED_VEHICLE_COMMANDS:
+        return jsonify({"ok": False, "error": "unsupported command", "command": command}), 400
+    if vehicle_id is None and not vin:
+        return jsonify({"ok": False, "error": "vehicle_id or vin is required"}), 400
+    if payload is not None and not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "payload must be a JSON object"}), 400
+
+    vin_or_id, vehicle = _resolve_vehicle_identifier(vehicle_id=vehicle_id, vin=vin)
+    if not vin_or_id:
+        return jsonify({"ok": False, "error": "vehicle not found in current account"}), 404
+
+    status, message, raw = _execute_vehicle_command(vin_or_id, command, payload=payload, lang=lang)
+    http_code = 200 if status == "ok" else 400
+    return jsonify({
+        "ok": status == "ok",
+        "status": status,
+        "message": message,
+        "command": command,
+        "target": {
+            "vin": vehicle.get("vin") if vehicle else vin_or_id,
+            "vehicle_id": vehicle.get("vehicle_id") if vehicle else None,
+            "id": vehicle.get("id") if vehicle else None,
+            "display_name": vehicle.get("display_name") if vehicle else None,
+        },
+        "result": raw,
+    }), http_code
+
+
+@app.route("/api/openclaw/describe", methods=["GET"])
+def api_openclaw_describe():
+    base_url = request.url_root.rstrip("/")
+    return jsonify({
+        "name": "tesla-openclaw-api",
+        "version": OPENCLAW_API_VERSION,
+        "description": "OpenClaw-friendly API for Tesla vehicle query and commands (no auth in current phase).",
+        "base_url": base_url,
+        "endpoints": [
+            {"method": "GET", "path": "/api/health", "purpose": "Service health check"},
+            {"method": "GET", "path": "/api/openclaw/vehicles", "purpose": "List available vehicles"},
+            {
+                "method": "POST",
+                "path": "/api/openclaw/command",
+                "purpose": "Execute a Tesla command",
+                "body_schema": {
+                    "command": "string, required",
+                    "vehicle_id": "number|string, optional if vin is provided",
+                    "vin": "string, optional if vehicle_id is provided",
+                    "payload": "object, optional",
+                    "lang": "zh|en, optional, default zh",
+                },
+            },
+            {"method": "GET", "path": "/api/openclaw/openapi.json", "purpose": "OpenAPI schema"},
+        ],
+        "supported_commands": sorted(SUPPORTED_VEHICLE_COMMANDS),
+        "examples": [
+            {
+                "name": "start climate",
+                "request": {
+                    "url": f"{base_url}/api/openclaw/command",
+                    "method": "POST",
+                    "json": {"command": "auto_conditioning_start", "vehicle_id": "<vehicle_id>"},
+                },
+            },
+            {
+                "name": "set charge limit",
+                "request": {
+                    "url": f"{base_url}/api/openclaw/command",
+                    "method": "POST",
+                    "json": {"command": "set_charge_limit", "vin": "<vin>", "payload": {"percent": 80}},
+                },
+            },
+        ],
+    })
+
+
+@app.route("/api/openclaw/openapi.json", methods=["GET"])
+def api_openclaw_openapi():
+    base_url = request.url_root.rstrip("/")
+    return jsonify({
+        "openapi": "3.0.3",
+        "info": {
+            "title": "Tesla OpenClaw API",
+            "version": OPENCLAW_API_VERSION,
+            "description": "Minimal API for integrating OpenClaw bot with Tesla Fleet commands.",
+        },
+        "servers": [{"url": base_url}],
+        "paths": {
+            "/api/health": {
+                "get": {"summary": "Health check", "responses": {"200": {"description": "OK"}}}
+            },
+            "/api/openclaw/vehicles": {
+                "get": {"summary": "List vehicles", "responses": {"200": {"description": "Vehicle list"}}}
+            },
+            "/api/openclaw/command": {
+                "post": {
+                    "summary": "Execute vehicle command",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "command": {"type": "string"},
+                                        "vehicle_id": {"type": "string"},
+                                        "vin": {"type": "string"},
+                                        "payload": {"type": "object"},
+                                        "lang": {"type": "string", "enum": ["zh", "en"]},
+                                    },
+                                    "required": ["command"],
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {"description": "Command executed"},
+                        "400": {"description": "Validation or execution error"},
+                        "404": {"description": "Vehicle not found"},
+                    },
+                }
+            },
+            "/api/openclaw/describe": {
+                "get": {"summary": "Human and bot friendly API description", "responses": {"200": {"description": "Description"}}}
+            },
+        },
+    })
 
 
 @app.route("/vehicle/<vid>")

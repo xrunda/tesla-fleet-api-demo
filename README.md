@@ -87,8 +87,9 @@ Now that we have our python web application running and our ngrok public domain 
 
 Change the `AUDIENCE` value below to one of the following based on your location. For more information see the Fleet API Documentation.
 
-- North America: `https://fleet-api.prd.na.vn.cloud.tesla.com`
-- Europe: `https://fleet-api.prd.eu.vn.cloud.tesla.com`
+- North America & Asia-Pacific (excluding China): `https://fleet-api.prd.na.vn.cloud.tesla.com`
+- Europe, Middle East & Africa: `https://fleet-api.prd.eu.vn.cloud.tesla.com`
+- China (中国大陆车辆): `https://fleet-api.prd.cn.vn.cloud.tesla.cn`
 
 ```
 CLIENT_ID='your-tesla-client-id'

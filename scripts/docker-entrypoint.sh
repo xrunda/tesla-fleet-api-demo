@@ -11,10 +11,14 @@ TLS_CERT="$CONFIG_DIR/tls-cert.pem"
 FLEET_KEY="$CONFIG_DIR/fleet-key.pem"
 
 # K8s Secret 通过环境变量注入私钥时，写到临时文件（/app/config 可能为只读 Volume）
+# 规范化 PEM：K8s 可能把换行变成字面 \n 或空格，导致 proxy 报 invalid private key: expected PEM encoding
 if [[ -n "${FLEET_KEY_PEM:-}" && ! -f "$FLEET_KEY" ]]; then
   FLEET_KEY="/tmp/proxy-config/fleet-key.pem"
   mkdir -p "$(dirname "$FLEET_KEY")"
-  printf '%s\n' "$FLEET_KEY_PEM" > "$FLEET_KEY"
+  content="${FLEET_KEY_PEM//\\n/$'\n'}"
+  # 若为单行或空格分隔的块（K8s 常把换行变成空格），将空格改为换行；PEM base64 不含空格
+  content="${content// /$'\n'}"
+  echo "$content" > "$FLEET_KEY"
   chmod 600 "$FLEET_KEY"
 fi
 

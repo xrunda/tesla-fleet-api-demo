@@ -506,6 +506,7 @@ def vehicle(vid):
             "human_tip": "先点按钮即可，只有需要时再展开高级参数填写 JSON。",
             "adv_params": "高级参数（可选）",
             "example": "示例",
+            "fill_example": "一键填入",
         },
         "en": {
             "dashboard": "Vehicle Dashboard",
@@ -558,6 +559,7 @@ def vehicle(vid):
             "human_tip": "Tap Run directly; only open advanced params when needed.",
             "adv_params": "Advanced Params (Optional)",
             "example": "Example",
+            "fill_example": "Fill Example",
         },
     }[lang]
 
@@ -828,6 +830,7 @@ def vehicle(vid):
         rows = []
         for name in commands:
             example_payload = command_payload_example.get(name, "")
+            example_payload_attr = html.escape(example_payload, quote=True)
             rows.append(
                 f"<form class='cmd-human' method='post' action='/vehicle/{vid}/command/{name}'>"
                 f"<div class='cmd-human-head'>"
@@ -840,7 +843,10 @@ def vehicle(vid):
                 f"</div>"
                 f"<details class='cmd-adv'>"
                 f"<summary>{i18n['adv_params']}</summary>"
+                f"<div class='cmd-adv-row'>"
                 f"<input class='payload-input' name='payload' placeholder='{i18n['payload_optional']}'>"
+                f"<button type='button' class='action-btn mini ghost' data-example=\"{example_payload_attr}\" onclick='fillExample(this)'>{i18n['fill_example']}</button>"
+                f"</div>"
                 f"<div class='muted'>{i18n['example']}: <code>{example_payload or '{}'} </code></div>"
                 f"</details>"
                 f"</form>"
@@ -1000,6 +1006,11 @@ def vehicle(vid):
             min-width: 58px;
             height: 34px;
         }}
+        .action-btn.ghost {{
+            background: rgba(30,41,59,0.9);
+            border-color: rgba(148,163,184,0.45);
+            color: #dbeafe;
+        }}
         .cmd-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1068,6 +1079,12 @@ def vehicle(vid):
             user-select: none;
             margin-bottom: 6px;
         }}
+        .cmd-adv-row {{
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px;
+            align-items: center;
+        }}
         .cmd-item {{
             display: flex;
             align-items: center;
@@ -1110,6 +1127,16 @@ def vehicle(vid):
         .raw td {{ padding: 7px 14px; border-top: 1px solid rgba(148,163,184,0.12); vertical-align: top; }}
         .raw td:first-child {{ width: 42%; color: var(--text-muted); word-break: break-all; }}
     </style>
+    <script>
+        function fillExample(btn) {{
+            const adv = btn.closest('.cmd-adv');
+            if (!adv) return;
+            const input = adv.querySelector('input[name="payload"]');
+            if (!input) return;
+            input.value = btn.dataset.example || '';
+            input.focus();
+        }}
+    </script>
     </head>
     <body>
         <div class="container">

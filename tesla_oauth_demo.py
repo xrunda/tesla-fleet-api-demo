@@ -1,5 +1,5 @@
 
-from flask import Flask, redirect, request, send_from_directory, session
+from flask import Flask, redirect, request, Response, send_from_directory, session
 import secrets, requests, urllib.parse, time, os, base64, json
 import html
 
@@ -1257,9 +1257,18 @@ def vehicle(vid):
     return page_html
 
 
+# 公钥可由环境变量 TESLA_PUBLIC_KEY_PEM 传入内容，便于 Docker/K8s 等无文件挂载场景
+TESLA_PUBLIC_KEY_PEM_ENV = "TESLA_PUBLIC_KEY_PEM"
+WELL_KNOWN_PUBLIC_KEY_FILENAME = "com.tesla.3p.public-key.pem"
+
+
 @app.route('/.well-known/appspecific/<path:filename>')
 def well_known(filename):
-    return send_from_directory('.well-known/appspecific', filename)
+    if filename == WELL_KNOWN_PUBLIC_KEY_FILENAME:
+        pem_content = os.getenv(TESLA_PUBLIC_KEY_PEM_ENV, "").strip()
+        if pem_content:
+            return Response(pem_content, mimetype="application/x-pem-file")
+    return send_from_directory(".well-known/appspecific", filename)
 
 if __name__ == "__main__":
-    app.run(port=8080, debug=False)
+    app.run(port=8080, host='0.0.0.0', debug=False)

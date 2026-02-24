@@ -37,6 +37,7 @@
 
 - `tesla_oauth_demo.py`：主程序（OAuth、车辆数据、指令执行、UI）
 - `get_partner_token.sh`：注册 partner domain 脚本
+- `http_proxy/`：Docker 构建时在此目录写入编译好的 **Linux 版** tesla-http-proxy（仓库内不提交二进制）；本机需跑 proxy 时可用 `scripts/build_linux_proxy.sh` 生成 Linux 版，或从 [teslamotors/vehicle-command](https://github.com/teslamotors/vehicle-command) 自行编译
 - `.well-known/appspecific/com.tesla.3p.public-key.pem`：对外公钥
 - `private-key.pem` / `public-key.pem`：本地密钥
 - `imgs/`：README 配图
@@ -57,17 +58,116 @@
 
 ## 4. 配置应用
 
-编辑 `tesla_oauth_demo.py` 顶部配置：
+可编辑 `tesla_oauth_demo.py` 顶部默认值，**更推荐**通过环境变量传入（见 4.1），便于 Docker/云部署且不写回仓库。
 
-- `CLIENT_ID`
-- `CLIENT_SECRET`
-- `REDIRECT_URI`（必须与开发者后台一致）
+代码中读取的配置项：
+
+- `CLIENT_ID` → 环境变量 `TESLA_CLIENT_ID`
+- `CLIENT_SECRET` → 环境变量 `TESLA_CLIENT_SECRET`
+- `REDIRECT_URI` → 环境变量 `TESLA_REDIRECT_URI`（必须与开发者后台一致）
 
 中国区固定配置已内置：
 
 - `FLEET_API_BASE = https://fleet-api.prd.cn.vn.cloud.tesla.cn`
 - `AUTH_AUTHORIZE_BASE = https://auth.tesla.cn`
 - `AUTH_TOKEN_URL = https://auth.tesla.cn/oauth2/v3/token`
+
+### 4.1 由外部传入配置（环境变量与 PEM）
+
+所有配置均可通过**环境变量**传入，无需修改代码，适合 Docker、K8s、Vercel 等部署方式。
+
+| 环境变量 | 说明 |
+|----------|------|
+| `TESLA_CLIENT_ID` | 开发者后台 Client ID |
+| `TESLA_CLIENT_SECRET` | 开发者后台 Client Secret |
+| `TESLA_REDIRECT_URI` | 回调地址，需与开发者后台一致 |
+| `FLASK_SECRET_KEY` | Session 签名密钥（生产必设） |
+| `VEHICLE_COMMAND_PROXY_BASE` | 车辆指令签名代理地址（可选） |
+| `VEHICLE_COMMAND_PROXY_INSECURE` | 是否跳过代理 TLS 校验，默认 `1`（可选） |
+| `VEHICLE_COMMAND_PROXY_CA_CERT` | 代理 CA 证书路径（可选） |
+| `SESSION_COOKIE_SECURE` | 是否仅 HTTPS 传输 Cookie，默认 `1`（可选） |
+
+**公钥（`.well-known` 对外公钥）两种方式二选一：**
+
+1. **文件方式**：在项目下放置 `.well-known/appspecific/com.tesla.3p.public-key.pem`（见第 5 节）。
+2. **PEM 内容方式**：设置环境变量 `TESLA_PUBLIC_KEY_PEM`，值为公钥的**完整 PEM 文本**（含 `-----BEGIN PUBLIC KEY-----` 与 `-----END PUBLIC KEY-----`）。  
+   适用于无法挂载文件的场景（如 Docker 仅用 env、K8s Secret 注入、Vercel 等），无需在镜像或运行时存在物理文件。
+
+**Docker 示例：**
+
+```bash
+# 使用 -e 传入
+docker run -p 8080:8080 \
+  -e TESLA_CLIENT_ID=你的client_id \
+  -e TESLA_CLIENT_SECRET=你的client_secret \
+  -e TESLA_REDIRECT_URI=https://你的域名/auth/callback \
+  -e FLASK_SECRET_KEY=随机强密钥 \
+  -e "TESLA_PUBLIC_KEY_PEM=$(cat .well-known/appspecific/com.tesla.3p.public-key.pem)" \
+  镜像名
+
+# 或使用 env 文件（不要提交到 git）
+docker run -p 8080:8080 --env-file .env 镜像名
+
+# 若需指令签名：挂载 config 并映射 4443，容器内会先启动 proxy 再启动 Flask
+docker run -p 4443:4443 -p 8080:8080 -v /你的路径/config:/app/config --env-file .env 镜像名
+```
+
+### 4.2 部署到 Kubernetes（K8s）
+
+在 K8s 中提供 **fleet-key.pem** 有两种方式，任选其一即可让入口脚本启动 proxy：
+
+**方式 A：Secret 挂载为 Volume**
+
+将私钥存入 Secret，挂载到 `/app/config`，文件名须为 `fleet-key.pem`：
+
+```yaml
+# 将 fleet-key.pem 内容存入 Secret（替换为你的私钥）
+kubectl create secret generic tesla-fleet-secret \
+  --from-file=fleet-key.pem=/path/to/fleet-key.pem \
+  --from-literal=TESLA_CLIENT_ID=xxx \
+  --from-literal=TESLA_CLIENT_SECRET=xxx \
+  --from-literal=FLASK_SECRET_KEY=xxx \
+  --from-literal=TESLA_REDIRECT_URI=https://你的域名/auth/callback
+```
+
+在 Deployment 中挂载并暴露 8080（及可选 4443）：
+
+```yaml
+volumeMounts:
+  - name: config
+    mountPath: /app/config
+    readOnly: true
+volumes:
+  - name: config
+    secret:
+      secretName: tesla-fleet-secret
+      items:
+        - key: fleet-key.pem
+          path: fleet-key.pem
+```
+
+**方式 B：Secret 通过环境变量注入（FLEET_KEY_PEM）**
+
+私钥内容通过环境变量传入，入口脚本会写入临时文件并启动 proxy（适合不想挂载 Volume 时）：
+
+```yaml
+env:
+  - name: FLEET_KEY_PEM
+    valueFrom:
+      secretKeyRef:
+        name: tesla-fleet-secret
+        key: fleet-key.pem
+  - name: TESLA_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: tesla-fleet-secret
+        key: TESLA_CLIENT_ID
+  # ... 其他 TESLA_*、FLASK_SECRET_KEY 等
+```
+
+创建 Secret 时把私钥整段内容放入某 key（如 `fleet-key.pem`），value 为 PEM 文本（含 `-----BEGIN EC PRIVATE KEY-----` 等）。同一 Pod 内 proxy 与 Flask 同机，`VEHICLE_COMMAND_PROXY_BASE` 可不设（默认 `https://127.0.0.1:4443`）；对外 HTTPS 由 Ingress 提供即可。
+
+**说明**：`private-key.pem` / `public-key.pem` 仅用于本地生成与拷贝到 `.well-known`；Flask 应用只负责对外提供公钥（文件或 `TESLA_PUBLIC_KEY_PEM`）。车辆指令签名使用的私钥由独立进程 `tesla-http-proxy` 管理，需在其自己的配置中传入对应 key 文件或内容。
 
 ---
 
@@ -118,7 +218,14 @@ bash get_partner_token.sh
 对于大量新车型，车辆指令需要 Tesla Vehicle Command Protocol 签名。  
 建议启动 `tesla-http-proxy` 后再执行命令。
 
-### 7.1 启动 proxy（示例）
+**Docker 用户**：镜像内已包含 Linux 版 proxy；**启动顺序与 README 一致：先 proxy，再 HTTP 服务**。入口脚本会检测 `/app/config` 下是否有 **`fleet-key.pem`**（车辆指令签名私钥，必选）；若还有 `tls-key.pem`、`tls-cert.pem` 则使用，**否则自动生成自签名 TLS 证书**（适用于由 Ingress 提供对外 HTTPS、仅需后端跑 proxy 的场景，此时不必准备 proxy 的 PEM）。例如：
+
+```bash
+# 仅挂载 fleet-key.pem（TLS 自动生成）
+docker run -p 4443:4443 -p 8080:8080 -v /你的路径/config:/app/config --env-file .env 镜像名
+```
+
+### 7.1 启动 proxy（示例，非 Docker）
 
 ```bash
 ~/go/bin/tesla-http-proxy \
@@ -129,7 +236,7 @@ bash get_partner_token.sh
   -port 4443
 ```
 
-### 7.2 启动 Flask（连接 proxy）
+### 7.2 启动 Flask（连接 proxy，非 Docker）
 
 ```bash
 cd "/Users/liguang/Documents/xRunda/project/AI/github/tesla-fleet-api-demo"

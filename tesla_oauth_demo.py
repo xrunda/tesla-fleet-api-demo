@@ -6,9 +6,9 @@ import html
 app = Flask(__name__)
 
 # 中国区应用（developer.tesla.cn 的 openclaw），与 auth.tesla.cn 一致才不会被报 client_id 无法识别
-CLIENT_ID = "29357fd6-434e-4d3b-a305-bb63a65d9f55"
-CLIENT_SECRET = "ta-secret.syUH05HKiN++h+xN"
-REDIRECT_URI = "https://unrebuffable-antonietta-monocled.ngrok-free.dev/auth/callback"
+CLIENT_ID = os.getenv("TESLA_CLIENT_ID", "29357fd6-434e-4d3b-a305-bb63a65d9f55")
+CLIENT_SECRET = os.getenv("TESLA_CLIENT_SECRET", "ta-secret.syUH05HKiN++h+xN")
+REDIRECT_URI = os.getenv("TESLA_REDIRECT_URI", "https://unrebuffable-antonietta-monocled.ngrok-free.dev/auth/callback")
 SCOPES = "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
 STATE = secrets.token_urlsafe(32)
 
@@ -1255,4 +1255,5 @@ def vehicle(vid):
 def well_known(filename):
     return send_from_directory('.well-known/appspecific', filename)
 
-app.run(port=8080, debug=False)
+if __name__ == "__main__":
+    app.run(port=8080, debug=False)

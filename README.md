@@ -140,7 +140,45 @@ python tesla_oauth_demo.py
 
 ---
 
-## 8. 页面入口
+## 8. 部署到 Vercel
+
+项目已包含 Vercel 所需文件：
+
+- `vercel.json`
+- `api/index.py`
+- `requirements.txt`
+
+### 8.1 在 Vercel 设置环境变量
+
+至少配置以下变量（Production / Preview 都建议配置）：
+
+- `TESLA_CLIENT_ID`
+- `TESLA_CLIENT_SECRET`
+- `TESLA_REDIRECT_URI`（示例：`https://<你的-vercel-domain>/auth/callback`）
+- `VEHICLE_COMMAND_PROXY_BASE`（可选；远程签名代理地址）
+- `VEHICLE_COMMAND_PROXY_INSECURE`（可选；默认 `1` 仅用于开发）
+
+### 8.2 部署后回填 Tesla 开发者后台
+
+把 Vercel 域名回填到应用配置：
+
+- Allowed Origin: `https://<你的-vercel-domain>`
+- Redirect URI: `https://<你的-vercel-domain>/auth/callback`
+
+并确保以下地址可公开访问：
+
+- `https://<你的-vercel-domain>/.well-known/appspecific/com.tesla.3p.public-key.pem`
+
+### 8.3 验证
+
+- 打开 `https://<你的-vercel-domain>`
+- 点击登录并完成授权
+- 首页出现车辆列表
+- 进入车辆详情页后测试“开启空调”等指令
+
+---
+
+## 9. 页面入口
 
 - 首页：`https://<你的-ngrok-domain>`
 - 车辆详情：点击车辆进入看板与指令面板
@@ -150,7 +188,7 @@ python tesla_oauth_demo.py
 
 ---
 
-## 9. 常见问题
+## 10. 常见问题
 
 ### `Vehicle Command Protocol required`
 
@@ -169,7 +207,7 @@ python tesla_oauth_demo.py
 
 ---
 
-## 10. 配图
+## 11. 配图
 
 开发者后台配置示例：
 
@@ -181,3 +219,4 @@ python tesla_oauth_demo.py
 ![Dashboard](imgs/ScreenShot_2026-02-24_101423_340.png)
 ![Commands](imgs/ScreenShot_2026-02-24_101447_480.png)
 ![Latest Commands Panel](imgs/ScreenShot_2026-02-24_101852_000.png)
+![Vercel Deployment](imgs/vercel_deployment_latest.png)

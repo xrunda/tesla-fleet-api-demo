@@ -112,6 +112,61 @@ docker run -p 8080:8080 --env-file .env 镜像名
 docker run -p 4443:4443 -p 8080:8080 -v /你的路径/config:/app/config --env-file .env 镜像名
 ```
 
+### 4.2 部署到 Kubernetes（K8s）
+
+在 K8s 中提供 **fleet-key.pem** 有两种方式，任选其一即可让入口脚本启动 proxy：
+
+**方式 A：Secret 挂载为 Volume**
+
+将私钥存入 Secret，挂载到 `/app/config`，文件名须为 `fleet-key.pem`：
+
+```yaml
+# 将 fleet-key.pem 内容存入 Secret（替换为你的私钥）
+kubectl create secret generic tesla-fleet-secret \
+  --from-file=fleet-key.pem=/path/to/fleet-key.pem \
+  --from-literal=TESLA_CLIENT_ID=xxx \
+  --from-literal=TESLA_CLIENT_SECRET=xxx \
+  --from-literal=FLASK_SECRET_KEY=xxx \
+  --from-literal=TESLA_REDIRECT_URI=https://你的域名/auth/callback
+```
+
+在 Deployment 中挂载并暴露 8080（及可选 4443）：
+
+```yaml
+volumeMounts:
+  - name: config
+    mountPath: /app/config
+    readOnly: true
+volumes:
+  - name: config
+    secret:
+      secretName: tesla-fleet-secret
+      items:
+        - key: fleet-key.pem
+          path: fleet-key.pem
+```
+
+**方式 B：Secret 通过环境变量注入（FLEET_KEY_PEM）**
+
+私钥内容通过环境变量传入，入口脚本会写入临时文件并启动 proxy（适合不想挂载 Volume 时）：
+
+```yaml
+env:
+  - name: FLEET_KEY_PEM
+    valueFrom:
+      secretKeyRef:
+        name: tesla-fleet-secret
+        key: fleet-key.pem
+  - name: TESLA_CLIENT_ID
+    valueFrom:
+      secretKeyRef:
+        name: tesla-fleet-secret
+        key: TESLA_CLIENT_ID
+  # ... 其他 TESLA_*、FLASK_SECRET_KEY 等
+```
+
+创建 Secret 时把私钥整段内容放入某 key（如 `fleet-key.pem`），value 为 PEM 文本（含 `-----BEGIN EC PRIVATE KEY-----` 等）。同一 Pod 内 proxy 与 Flask 同机，`VEHICLE_COMMAND_PROXY_BASE` 可不设（默认 `https://127.0.0.1:4443`）；对外 HTTPS 由 Ingress 提供即可。
+
 **说明**：`private-key.pem` / `public-key.pem` 仅用于本地生成与拷贝到 `.well-known`；Flask 应用只负责对外提供公钥（文件或 `TESLA_PUBLIC_KEY_PEM`）。车辆指令签名使用的私钥由独立进程 `tesla-http-proxy` 管理，需在其自己的配置中传入对应 key 文件或内容。
 
 ---

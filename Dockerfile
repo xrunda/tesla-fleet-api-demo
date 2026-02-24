@@ -9,6 +9,7 @@ RUN CGO_ENABLED=0 go build -o tesla-http-proxy ./cmd/tesla-http-proxy
 # 阶段 2：Flask 应用 + 使用上面编译的 Linux proxy
 FROM python:3.12-slim
 
+RUN sudo sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 

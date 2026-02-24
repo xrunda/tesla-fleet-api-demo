@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 按 README 顺序：先启动 proxy（若提供 fleet-key 或完整 config），再启动 Flask。
 # 官方 proxy 必须使用 TLS；若未提供 tls-key/cert，则在有 fleet-key 时自动生成自签名 TLS（适用于 Ingress 提供对外 HTTPS 的场景）。
+# K8s：可通过 Volume 挂载 fleet-key.pem，或通过环境变量 FLEET_KEY_PEM（如 secretKeyRef）注入私钥内容。
 set -e
 
 CONFIG_DIR="${CONFIG_DIR:-/app/config}"
@@ -8,6 +9,14 @@ PROXY_BIN="/app/http_proxy/tesla-http-proxy"
 TLS_KEY="$CONFIG_DIR/tls-key.pem"
 TLS_CERT="$CONFIG_DIR/tls-cert.pem"
 FLEET_KEY="$CONFIG_DIR/fleet-key.pem"
+
+# K8s Secret 通过环境变量注入私钥时，写到临时文件（/app/config 可能为只读 Volume）
+if [[ -n "${FLEET_KEY_PEM:-}" && ! -f "$FLEET_KEY" ]]; then
+  FLEET_KEY="/tmp/proxy-config/fleet-key.pem"
+  mkdir -p "$(dirname "$FLEET_KEY")"
+  printf '%s\n' "$FLEET_KEY_PEM" > "$FLEET_KEY"
+  chmod 600 "$FLEET_KEY"
+fi
 
 need_proxy() {
   [[ -f "$FLEET_KEY" ]]

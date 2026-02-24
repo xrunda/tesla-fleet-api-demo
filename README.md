@@ -57,17 +57,58 @@
 
 ## 4. 配置应用
 
-编辑 `tesla_oauth_demo.py` 顶部配置：
+可编辑 `tesla_oauth_demo.py` 顶部默认值，**更推荐**通过环境变量传入（见 4.1），便于 Docker/云部署且不写回仓库。
 
-- `CLIENT_ID`
-- `CLIENT_SECRET`
-- `REDIRECT_URI`（必须与开发者后台一致）
+代码中读取的配置项：
+
+- `CLIENT_ID` → 环境变量 `TESLA_CLIENT_ID`
+- `CLIENT_SECRET` → 环境变量 `TESLA_CLIENT_SECRET`
+- `REDIRECT_URI` → 环境变量 `TESLA_REDIRECT_URI`（必须与开发者后台一致）
 
 中国区固定配置已内置：
 
 - `FLEET_API_BASE = https://fleet-api.prd.cn.vn.cloud.tesla.cn`
 - `AUTH_AUTHORIZE_BASE = https://auth.tesla.cn`
 - `AUTH_TOKEN_URL = https://auth.tesla.cn/oauth2/v3/token`
+
+### 4.1 由外部传入配置（环境变量与 PEM）
+
+所有配置均可通过**环境变量**传入，无需修改代码，适合 Docker、K8s、Vercel 等部署方式。
+
+| 环境变量 | 说明 |
+|----------|------|
+| `TESLA_CLIENT_ID` | 开发者后台 Client ID |
+| `TESLA_CLIENT_SECRET` | 开发者后台 Client Secret |
+| `TESLA_REDIRECT_URI` | 回调地址，需与开发者后台一致 |
+| `FLASK_SECRET_KEY` | Session 签名密钥（生产必设） |
+| `VEHICLE_COMMAND_PROXY_BASE` | 车辆指令签名代理地址（可选） |
+| `VEHICLE_COMMAND_PROXY_INSECURE` | 是否跳过代理 TLS 校验，默认 `1`（可选） |
+| `VEHICLE_COMMAND_PROXY_CA_CERT` | 代理 CA 证书路径（可选） |
+| `SESSION_COOKIE_SECURE` | 是否仅 HTTPS 传输 Cookie，默认 `1`（可选） |
+
+**公钥（`.well-known` 对外公钥）两种方式二选一：**
+
+1. **文件方式**：在项目下放置 `.well-known/appspecific/com.tesla.3p.public-key.pem`（见第 5 节）。
+2. **PEM 内容方式**：设置环境变量 `TESLA_PUBLIC_KEY_PEM`，值为公钥的**完整 PEM 文本**（含 `-----BEGIN PUBLIC KEY-----` 与 `-----END PUBLIC KEY-----`）。  
+   适用于无法挂载文件的场景（如 Docker 仅用 env、K8s Secret 注入、Vercel 等），无需在镜像或运行时存在物理文件。
+
+**Docker 示例：**
+
+```bash
+# 使用 -e 传入
+docker run -p 8080:8080 \
+  -e TESLA_CLIENT_ID=你的client_id \
+  -e TESLA_CLIENT_SECRET=你的client_secret \
+  -e TESLA_REDIRECT_URI=https://你的域名/auth/callback \
+  -e FLASK_SECRET_KEY=随机强密钥 \
+  -e "TESLA_PUBLIC_KEY_PEM=$(cat .well-known/appspecific/com.tesla.3p.public-key.pem)" \
+  镜像名
+
+# 或使用 env 文件（不要提交到 git）
+docker run -p 8080:8080 --env-file .env 镜像名
+```
+
+**说明**：`private-key.pem` / `public-key.pem` 仅用于本地生成与拷贝到 `.well-known`；Flask 应用只负责对外提供公钥（文件或 `TESLA_PUBLIC_KEY_PEM`）。车辆指令签名使用的私钥由独立进程 `tesla-http-proxy` 管理，需在其自己的配置中传入对应 key 文件或内容。
 
 ---
 

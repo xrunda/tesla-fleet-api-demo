@@ -37,6 +37,7 @@
 
 - `tesla_oauth_demo.py`：主程序（OAuth、车辆数据、指令执行、UI）
 - `get_partner_token.sh`：注册 partner domain 脚本
+- `http_proxy/tesla-http-proxy`：车辆指令签名代理二进制（已纳入 git；可能为 macOS 版，Docker 内运行需 Linux 版）
 - `.well-known/appspecific/com.tesla.3p.public-key.pem`：对外公钥
 - `private-key.pem` / `public-key.pem`：本地密钥
 - `imgs/`：README 配图

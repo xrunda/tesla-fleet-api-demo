@@ -1,16 +1,19 @@
 
-from flask import Flask, redirect, request, send_from_directory
+from flask import Flask, redirect, request, send_from_directory, session
 import secrets, requests, urllib.parse, time, os, base64, json
 import html
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-this-secret")
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
 
 # 中国区应用（developer.tesla.cn 的 openclaw），与 auth.tesla.cn 一致才不会被报 client_id 无法识别
 CLIENT_ID = os.getenv("TESLA_CLIENT_ID", "29357fd6-434e-4d3b-a305-bb63a65d9f55")
 CLIENT_SECRET = os.getenv("TESLA_CLIENT_SECRET", "ta-secret.syUH05HKiN++h+xN")
 REDIRECT_URI = os.getenv("TESLA_REDIRECT_URI", "https://unrebuffable-antonietta-monocled.ngrok-free.dev/auth/callback")
 SCOPES = "openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds"
-STATE = secrets.token_urlsafe(32)
 
 # 中国区配置（参见官方 Regions and Countries / Third-Party Tokens 文档）
 # https://developer.tesla.com/docs/fleet-api/getting-started/regions-countries
@@ -32,7 +35,6 @@ class TeslaAPI:
         self.redirect_uri = redirect_uri
         self.scopes = scopes
         self.tokens = {}
-        self.state = STATE
         self.user_info = {}
         self.last_network_error = ""
 
@@ -173,12 +175,14 @@ def index():
     }[lang]
 
     if not tesla_api.tokens:
+        oauth_state = secrets.token_urlsafe(32)
+        session["oauth_state"] = oauth_state
         url = f"{AUTH_AUTHORIZE_BASE}/oauth2/v3/authorize?" + urllib.parse.urlencode({
             "client_id": CLIENT_ID,
             "redirect_uri": REDIRECT_URI,
             "response_type": "code",
             "scope": SCOPES,
-            "state": tesla_api.state
+            "state": oauth_state
         })
         return (
             "<h1>Tesla Fleet</h1>"
@@ -241,10 +245,12 @@ def callback():
     if "error" in request.args:
         return f"<h1>Tesla OAuth Error</h1><pre>{dict(request.args)}</pre>", 400
 
-    # Validate state parameter
+    # Validate state parameter (stored per-browser session)
     state = request.args.get("state")
-    if state != tesla_api.state:
+    expected_state = session.get("oauth_state")
+    if not expected_state or state != expected_state:
         return "<h1>Invalid state parameter (possible CSRF)</h1>", 400
+    session.pop("oauth_state", None)
 
     code = request.args.get("code")
     if not code:

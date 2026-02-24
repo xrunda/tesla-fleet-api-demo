@@ -155,6 +155,7 @@ python tesla_oauth_demo.py
 - `TESLA_CLIENT_ID`
 - `TESLA_CLIENT_SECRET`
 - `TESLA_REDIRECT_URI`（示例：`https://<你的-vercel-domain>/auth/callback`）
+- `FLASK_SECRET_KEY`（必配；用于 OAuth state 的 session 签名）
 - `VEHICLE_COMMAND_PROXY_BASE`（可选；远程签名代理地址）
 - `VEHICLE_COMMAND_PROXY_INSECURE`（可选；默认 `1` 仅用于开发）
 
@@ -207,7 +208,36 @@ python tesla_oauth_demo.py
 
 ---
 
-## 11. 配图
+## 11. Vercel 生产安全清单
+
+上线前建议逐项勾选：
+
+- [ ] **环境变量隔离**：仅在 Vercel 环境变量中保存 `TESLA_CLIENT_SECRET`，不要写回仓库。
+- [ ] **Session 密钥固定**：生产环境必须设置 `FLASK_SECRET_KEY`，不要使用默认值。
+- [ ] **回调地址一致**：`TESLA_REDIRECT_URI` 与 Tesla 开发者后台 `Redirect URI` 完全一致（协议/域名/路径）。
+- [ ] **Origin 最小化**：Tesla 后台只保留生产域名与必要预发域名，删除历史 ngrok/临时域名。
+- [ ] **Proxy TLS 开启校验**：生产建议 `VEHICLE_COMMAND_PROXY_INSECURE=0`，并配置 `VEHICLE_COMMAND_PROXY_CA_CERT`。
+- [ ] **最小权限原则**：应用 scopes 只保留实际需要，避免长期开放不使用的高权限命令 scope。
+- [ ] **密钥轮换机制**：定期轮换 `TESLA_CLIENT_SECRET` 与 Fleet 私钥，并验证 `.well-known` 公钥可访问。
+- [ ] **日志脱敏**：不要在日志打印 token、secret、完整 Authorization 头。
+- [ ] **错误监控**：在 Vercel 配置告警，重点关注 401/403、5xx、timeout、`Protocol required` 异常。
+- [ ] **指令风控**：对高风险命令（如清除数据、PIN、代客模式）建议加二次确认或管理员开关。
+
+推荐生产环境变量示例：
+
+```bash
+TESLA_CLIENT_ID=xxx
+TESLA_CLIENT_SECRET=xxx
+TESLA_REDIRECT_URI=https://<prod-domain>/auth/callback
+FLASK_SECRET_KEY=<strong-random-secret>
+VEHICLE_COMMAND_PROXY_BASE=https://<proxy-domain>
+VEHICLE_COMMAND_PROXY_INSECURE=0
+VEHICLE_COMMAND_PROXY_CA_CERT=/var/task/certs/proxy-ca.pem
+```
+
+---
+
+## 12. 配图
 
 开发者后台配置示例：
 

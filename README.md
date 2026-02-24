@@ -1,5 +1,9 @@
 # Tesla Fleet API Demo（中国区）
 
+📹 **项目演示视频**
+
+<video src="imgs/openclaw_tesla.mp4" controls width="600"></video>
+
 这是一个基于 Flask 的 Tesla Fleet API 演示项目，已支持：
 
 - OAuth 登录（中国区 `auth.tesla.cn`）

@@ -4,6 +4,8 @@
 
 <video src="imgs/openclaw_tesla.mp4" controls width="600"></video>
 
+若 GitHub 无法播放，可前往：[项目演示视频](https://youtu.be/GCh0_arD18g)
+
 这是一个基于 Flask 的 Tesla Fleet API 演示项目，已支持：
 
 - OAuth 登录（中国区 `auth.tesla.cn`）
